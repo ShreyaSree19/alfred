@@ -7,6 +7,7 @@ import os
 import torch
 import pprint
 import json
+# import data
 from data.preprocess import Dataset
 from importlib import import_module
 from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
@@ -91,7 +92,7 @@ if __name__ == '__main__':
         vocab = torch.load(os.path.join(args.data, "%s.vocab" % args.pp_folder))
 
     # load model
-    M = import_module('model.{}'.format(args.model))
+    M = import_module('models.model.{}'.format(args.model))
     if args.resume:
         print("Loading: " + args.resume)
         model, optimizer = M.Module.load(args.resume)

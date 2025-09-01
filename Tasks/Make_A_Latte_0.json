@@ -1,0 +1,126 @@
+{
+	"goal_object_name":"Coffee",
+	"goal_object_type":"Mug",
+	"video_path":"/home/atkeonlab-3/thor_cooking/ThorCooking/Videos/make_a_latte_0.mp4",
+	"task_graph_path":"/home/atkeonlab-3/thor_cooking/ThorCooking/Latte_Task_Graph.json",
+	"thor_objects":["CoffeeMachine","Mug"],
+	"fake_objects":[
+		{
+			"objectType":"Milk",
+			"pickupable":true,
+			"receptacle":false,
+			"openable":false,
+			"cookable":false,
+			"sliceable":false,
+			"toggleable":false,
+			"breakable":false
+		}
+	],
+	"banlist_objects": ["Cup"],
+	"thor_object_success_condition":[
+		{
+			"object":"Mug",
+			"relation":"is_filled_with",
+			"arguments":["coffee"]
+		},
+		{
+			"object":"Milk",
+			"relation":"receptacle_parent",
+			"arguments":["Mug"]
+		}
+	],
+	"pre_task_actions":[],
+	"action_segments":[
+		{
+			"action_text":"add milk to pitcher",
+			"action":"AddObject",
+			"object":"Milk",
+			"thor_object":false,
+			"start_frame":0,
+			"end_frame":560 
+		},
+		{
+			"action_text":"steam milk",
+			"action":"CookObject",
+			"object":"Milk",
+			"thor_object":false,
+			"start_frame":561,
+			"end_frame":3113 
+		},
+		{
+			"action_text":"clean steam wand",
+			"action":"CleanObject",
+			"object":"CoffeeMachine",
+			"thor_object":false,
+			"start_frame":3114,
+			"end_frame":3775 
+		},
+		{
+			"action_text":"grind coffee",
+			"action":"GrindObject",
+			"object":"Coffee",
+			"thor_object":false,
+			"start_frame":3776,
+			"end_frame":4929 
+		},
+		{
+			"action_text":"prepare portafilter",
+			"action":"PrepareObject",
+			"object":"Coffee",
+			"thor_object":false,
+			"start_frame":4930,
+			"end_frame":6170 
+		},
+		{
+			"action_text":"pickup mug",
+			"action":"PickupObject",
+			"object":"Mug",
+			"thor_object":true,
+			"start_frame":6171,
+			"end_frame":6260 
+		},
+		{
+			"action_text":"put mug in coffee machine",
+			"action":"PutObject",
+			"object":"CoffeeMachine",
+			"thor_object":true,
+			"start_frame":6261,
+			"end_frame":6317 
+		},
+		{
+			"action_text":"turn on coffee machine",
+			"action":"ToggleObjectOn",
+			"object":"CoffeeMachine",
+			"thor_object":true,
+			"start_frame":6318,
+			"end_frame":7033 
+		},
+		{
+			"action_text":"add milk to coffee",
+			"action":"AddObject",
+			"object":"Milk",
+			"thor_object":true,
+			"start_frame":7034,
+			"end_frame":7840 
+		}
+	],
+	"valid_start_indexes":[5,6,7,8,9],
+	"additional_segments":[
+		{
+			"action_text":"pour milk into coffee cup",
+			"action":"AddObject",
+			"object":"Milk",
+			"thor_object":true,
+			"start_frame":7034,
+			"end_frame":7840 
+		},
+		{
+			"action_text":"pull espresso shot",
+			"action":"ToggleObjectOn",
+			"object":"CoffeeMachine",
+			"thor_object":true,
+			"start_frame":6318,
+			"end_frame":7033 
+		}
+	]
+}	
