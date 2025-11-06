@@ -26,7 +26,7 @@ class DummyArgs:
 def single_eval_agent(env, agent, max_steps=10):
     # Run one evaluation episode with Alfred_Agent
     print("Initial goal satisfied:", env.get_goal_satisfied())
-
+    success = False
     for step in range(max_steps):
         print("Step: ", step)
         action_dict = agent.select_action()  
@@ -63,7 +63,9 @@ def single_eval_agent(env, agent, max_steps=10):
         # Check if task succeeded
         if getattr(env, "task", None) is not None:
             try:
-                success = env.get_goal_satisfied()
+                if env.get_goal_satisfied():
+                    success = True
+                    return True
             except ValueError as e:
                 print(f"[Warning] Skipping goal check: {e}")
                 return False
@@ -87,33 +89,56 @@ def eval_agent_baseline(tasks_dir, max_steps=10):
             with open(task_path, "r") as f:
                 task_data = json.load(f)
 
-            scene_num = task_data["scene"]["scene_num"]
-            scene_name = f"FloorPlan{scene_num}"
-
+            scene_num = task_data['scene']['scene_num']
+    
+            scene_name = 'FloorPlan%d' % scene_num
+            # print(task_data['scene']['scene_num'])
+            print(task_data['scene']['object_poses'])
             task_desc = task_data["turk_annotations"]["anns"][0]["task_desc"]
             scene_num = task_data['scene']['scene_num']
             object_poses = task_data['scene']['object_poses']
             dirty_and_empty = task_data['scene']['dirty_and_empty']
             object_toggles = task_data['scene']['object_toggles']
             init_action = task_data['scene']['init_action']
-            init_action.pop('rotateOnTeleport')
-            init_action['standing'] = True
+            # init_action.pop('rotateOnTeleport')
+            # init_action['standing'] = True
             print(task_desc)
-            env.set_task(task_data, dummy_args)
+            # # initialize to start position
             env.reset(scene_name)
+            env.step(dict(action='Pass'))  # one no-op step to stabilize
 
+            object_poses_fixed = []
+            for obj in object_poses:
+                name = obj['objectName']
+                pos = obj['position']
+                rot = obj['rotation']
+                wrong_env = True
+                for o in env.last_event.metadata['objects']:
+                    if o['name'] == name:  # exact match
+                        wrong_env = False
+                        object_poses_fixed.append({
+                            'objectId': o['objectId'],
+                            'position': pos,
+                            'rotation': rot
+                        })
+                        break
+                if wrong_env:
+                    print(f"[ERROR] FLAG WRONG ENV ________________________________________________.")
+            # object_poses = object_poses_fixed
+            print("Before restore now:", [o['objectId'] for o in env.last_event.metadata['objects']])
+            env.restore_scene(object_poses_fixed, object_toggles, dirty_and_empty)
+            print("After restore:", [o['objectId'] for o in env.last_event.metadata['objects']])
+
+            env.step(dict(init_action))
+
+            env.set_task(task_data, dummy_args)
             agent.set_task(task_desc)
             agent.set_env(env)
-
-
-            # env.restore_scene(object_poses, object_toggles, dirty_and_empty)
-
-            # # initialize to start position
-            # env.step(dict(task_data['scene']['init_action']))
 
             success = single_eval_agent(env, agent, max_steps=max_steps)
             successes += int(success)
             print(f"[{total}] {file} → {'SUCCESS' if success else 'FAIL'}")
+            env.step(dict(action="Pass")) 
 
         if total > 200:
             break

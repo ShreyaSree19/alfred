@@ -28,10 +28,11 @@ class ThorEnv(Controller):
         self.task = None
         super().__init__(quality=quality)
         self.local_executable_path = build_path
-        # self.start(x_display=x_display,
-        #            height=player_screen_height,
-        #            width=player_screen_width)
-        # self.task = None
+        print(x_display)
+        self.start(x_display=x_display,
+                   player_screen_height=player_screen_height,
+                   player_screen_width=player_screen_width)
+        self.task = None
 
         # internal states
         self.cleaned_objects = set()
@@ -64,7 +65,6 @@ class ThorEnv(Controller):
             scene_name = scene_name_or_num
         else:
             scene_name = 'FloorPlan%d' % scene_name_or_num
-
         super().reset(scene_name)
         event = super().step(dict(
             action='Initialize',
@@ -77,7 +77,6 @@ class ThorEnv(Controller):
             visibility_distance=visibility_distance,
             makeAgentsVisible=False,
         ))
-
         # reset task if specified
         if self.task is not None:
             self.task.reset()
@@ -94,12 +93,39 @@ class ThorEnv(Controller):
         self.cleaned_objects = set()
         self.cooled_objects = set()
         self.heated_objects = set()
+    
+    # def restore_scene(self, object_poses, object_toggles, dirty_and_empty):
+    #     event = super().step(dict(
+    #         action='Initialize',
+    #         gridSize=constants.AGENT_STEP_SIZE / constants.RECORD_SMOOTHING_FACTOR,
+    #         cameraY=constants.CAMERA_HEIGHT_OFFSET,
+    #         renderImage=constants.RENDER_IMAGE,
+    #         renderDepthImage=constants.RENDER_DEPTH_IMAGE,
+    #         renderClassImage=constants.RENDER_CLASS_IMAGE,
+    #         renderObjectImage=constants.RENDER_OBJECT_IMAGE,
+    #         visibility_distance=constants.VISIBILITY_DISTANCE,
+    #         makeAgentsVisible=False,
+    #     ))
 
+    #     if len(object_toggles) > 0:
+    #         event = super().step(dict(action='SetObjectToggles', objectToggles=object_toggles))
+
+    #     if dirty_and_empty:
+    #         event = super().step(dict(action='SetStateOfAllObjects', StateChange="CanBeDirty", forceAction=True))
+    #         event = super().step(dict(action='SetStateOfAllObjects', StateChange="CanBeFilled", forceAction=False))
+
+    #     event = super().step(dict(action='SetObjectPoses', objectPoses=object_poses))
+
+    #     # Dummy step to ensure last_event is valid for PutObject
+    #     event = self.step(dict(action='Pass'))
+
+    #     self.last_event = event
+    #     return event
     def restore_scene(self, object_poses, object_toggles, dirty_and_empty):
         '''
         restore object locations and states
         '''
-        super().step(dict(
+        event = super().step(dict(
             action='Initialize',
             gridSize=constants.AGENT_STEP_SIZE / constants.RECORD_SMOOTHING_FACTOR,
             cameraY=constants.CAMERA_HEIGHT_OFFSET,
@@ -110,17 +136,77 @@ class ThorEnv(Controller):
             visibility_distance=constants.VISIBILITY_DISTANCE,
             makeAgentsVisible=False,
         ))
-        if len(object_toggles) > 0:
-            super().step((dict(action='SetObjectToggles', objectToggles=object_toggles)))
-
+      
+        for toggle_info in object_toggles:
+            objects_metadata = event.metadata["objects"]
+            # Filter objects by their objectType
+            objects_of_type = [obj for obj in objects_metadata if obj["objectType"] == toggle_info["objectType"]]
+            print("HERE_________________________________________________")
+            for obj in objects_of_type:
+                if toggle_info["isOn"]:
+                     action = dict(action="ToggleObjectOn",
+                            objectId=obj['objectId'], forceAction=True)
+                else:
+                    action = dict(action="ToggleObjectOff",
+                            objectId=obj['objectId'], forceAction=True)
+                super().step(action)
         if dirty_and_empty:
             super().step(dict(action='SetStateOfAllObjects',
-                               StateChange="CanBeDirty",
-                               forceAction=True))
+                                StateChange="CanBeDirty",
+                                forceAction=True))
             super().step(dict(action='SetStateOfAllObjects',
-                               StateChange="CanBeFilled",
-                               forceAction=False))
+                                StateChange="CanBeFilled",
+                                forceAction=True))
+        for object_pose in object_poses:
+            super().step(dict(
+                action='TeleportObject',
+                objectId=object_pose['objectId'],
+                position=object_pose['position'],
+                rotation=object_pose['rotation'],
+                forceAction=True
+            ))
         super().step((dict(action='SetObjectPoses', objectPoses=object_poses)))
+
+
+    # def restore_scene(self, object_poses, object_toggles, dirty_and_empty):
+    #     '''
+    #     restore object locations and states
+    #     '''
+    #     super().step(dict(
+    #         action='Initialize',
+    #         gridSize=constants.AGENT_STEP_SIZE / constants.RECORD_SMOOTHING_FACTOR,
+    #         cameraY=constants.CAMERA_HEIGHT_OFFSET,
+    #         renderImage=constants.RENDER_IMAGE,
+    #         renderDepthImage=constants.RENDER_DEPTH_IMAGE,
+    #         renderClassImage=constants.RENDER_CLASS_IMAGE,
+    #         renderObjectImage=constants.RENDER_OBJECT_IMAGE,
+    #         visibility_distance=constants.VISIBILITY_DISTANCE,
+    #         makeAgentsVisible=False,
+    #     ))
+    #     if len(object_toggles) > 0:
+    #         for toggle_info in object_toggles:
+                    
+    #                 action = 'ToggleObjectOn' if toggle_info['isOn'] else 'ToggleObjectOff'
+    #                 self.step(dict(
+    #                     action=action,
+    #                     objectId=toggle_info['objectId'],
+    #                     forceAction=True
+    #                 ))
+    #     # if dirty_and_empty:
+    #     #     super().step(dict(action='SetStateOfAllObjects',
+    #     #                        StateChange="CanBeDirty",
+    #     #                        forceAction=False))
+    #     #     super().step(dict(action='SetStateOfAllObjects',
+    #     #                        StateChange="CanBeFilled",
+    #     #                        forceAction=False))
+    #     # need to teleoprt object
+    #     for object_pose in object_poses:
+    #         super().step(dict(
+    #             action='TeleportObject',
+    #             objectId=object_pose["objectId"],
+    #             position=object_pose["position"],
+    #             rotation=object_pose["rotation"]
+    #         ))
 
     def set_task(self, traj, args, reward_type='sparse', max_episode_length=2000):
         '''
@@ -128,31 +214,6 @@ class ThorEnv(Controller):
         '''
         task_type = traj['task_type']
         self.task = get_task(task_type, traj, self, args, reward_type=reward_type, max_episode_length=max_episode_length)
-
-    # def step(self, action, smooth_nav=False):
-    #     '''
-    #     overrides ai2thor.controller.Controller.step() for smooth navigation and goal_condition updates
-    #     '''
-    #     if smooth_nav:
-    #         if "MoveAhead" in action['action']:
-    #             self.smooth_move_ahead(action)
-    #         elif "Rotate" in action['action']:
-    #             self.smooth_rotate(action)
-    #         elif "Look" in action['action']:
-    #             self.smooth_look(action)
-    #         else:
-    #             super().step(action)
-    #     else:
-    #         if "LookUp" in action['action']:
-    #             self.look_angle(-constants.AGENT_HORIZON_ADJ)
-    #         elif "LookDown" in action['action']:
-    #             self.look_angle(constants.AGENT_HORIZON_ADJ)
-    #         else:
-    #             super().step(action)
-
-        # event = self.update_states(action)
-        # self.check_post_conditions(action)
-        # return event
 
     def check_post_conditions(self, action):
         '''
@@ -400,6 +461,7 @@ class ThorEnv(Controller):
         return np.array([pos_dict["x"], pos_dict["y"], pos_dict["z"]])
 
     def _pos_cost(self, pos_dict, object_location):
+        #add distance between robot and object
         pos_score = 0
         robot_angle = pos_dict["rotation"] / 180 * np.pi
         robot_angle = np.pi / 2 - robot_angle
@@ -426,10 +488,8 @@ class ThorEnv(Controller):
 		obj,
 	):
         obj_pos=obj["position"]
-        event = self.step(
-				action="GetInteractablePoses",
-				objectId=obj["objectId"],
-				rotations=list(range(0, 360, 10)),
+        event = self.step(dict(
+				action="GetReachablePositions"),
 			)
         interactable_positions = event.metadata["actionReturn"]
         if not interactable_positions:
@@ -440,102 +500,167 @@ class ThorEnv(Controller):
         best_cost = np.inf
         pos_idx = 0
         for i, pos in enumerate(interactable_positions):
+            pos["standing"] = True
+            pos[""]
             cost = self._pos_cost(pos, obj_pos)
             if cost < best_cost:
                 # print("BEST COST: ", cost)
                 best_cost = cost
                 pos_idx = i
+                # PSUEDOCODE
+                # Compute closest reachable position to the object
+                # Using code from pos cost, compute the rotation with the lowest angle diff to the object
+                # Teleport robot to that position and rotation
+                # Check horizons from  -30, 0, 30, -60 to find in which one the object is visible 
         success = self.move_to_dict(
             interactable_positions[pos_idx], mode="teleport"
         )
         event = self.step("MoveAhead")
 
         return success
-
-
-
-
     def to_thor_api_exec(self, action, object_id="", action_str="", obj=None, smooth_nav=False):
-        # TODO: parametrized navigation commands
-        
-        ########
-        if "RotateLeft" in action:
-            action = dict(action="RotateLeft",
-                          forceAction=True)
-            event = self.step(action, smooth_nav=smooth_nav)
-        elif "RotateRight" in action:
-            action = dict(action="RotateRight",
-                          forceAction=True)
-            event = self.step(action, smooth_nav=smooth_nav)
-        elif "MoveAhead" in action:
-            action = dict(action="MoveAhead",
-                          forceAction=True)
-            event = self.step(action, smooth_nav=smooth_nav)
-        elif "LookUp" in action:
-            action = dict(action="LookUp",
-                          forceAction=True)
-            event = self.step(action, smooth_nav=smooth_nav)
-        elif "LookDown" in action:
-            action = dict(action="LookDown",
-                          forceAction=True)
-            event = self.step(action, smooth_nav=smooth_nav)
-        ##########
+        """
+        Convert a high-level action string to a valid THOR API action.
+        Adds extensive safety checks and debug logs to locate 'NoneType' errors.
+        """
+        try:
+            # === Movement actions ===
+            if "RotateLeft" in action:
+                event = self.step(dict(action="RotateLeft", forceAction=False), smooth_nav=smooth_nav)
 
-        elif "OpenObject" in action:
-            action = dict(action="OpenObject",
-                          objectId=object_id,
-                          moveMagnitude=1.0)
-            event = self.step(action)
-            self.action_history
-        elif "CloseObject" in action:
-            action = dict(action="CloseObject",
-                          objectId=object_id,
-                          forceAction=True)
-            event = self.step(action)
-        elif "PickupObject" in action:
-            action = dict(action="PickupObject",
-                          objectId=object_id)
-            event = self.step(action)
-        elif "PutObject" in action:
-            inventory_object_id = self.last_event.metadata['inventoryObjects'][0]['objectId']
-            action = dict(action="PutObject",
-                          objectId=object_id,
-                        #   receptacleObjectId=object_id,
-                          forceAction=True,
-                          placeStationary=True)
-            event = self.step(action)
-        elif "ToggleObjectOn" in action:
-            action = dict(action="ToggleObjectOn",
-                          objectId=object_id)
-            event = self.step(action)
+            elif "RotateRight" in action:
+                event = self.step(dict(action="RotateRight", forceAction=False), smooth_nav=smooth_nav)
 
-        elif "ToggleObjectOff" in action:
-            action = dict(action="ToggleObjectOff",
-                          objectId=object_id)
-            event = self.step(action)
-        elif "SliceObject" in action:
-            # check if agent is holding knife in hand
-            inventory_objects = self.last_event.metadata['inventoryObjects']
-            if len(inventory_objects) == 0 or 'Knife' not in inventory_objects[0]['objectType']:
-                raise Exception("Agent should be holding a knife before slicing.")
+            elif "MoveAhead" in action:
+                event = self.step(dict(action="MoveAhead", forceAction=False), smooth_nav=smooth_nav)
 
-            action = dict(action="SliceObject",
-                          objectId=object_id)
-            event = self.step(action)
-        elif "GoToObject" in action:
-            event = self.move_to_obj(obj=obj)
-        else:
-            raise Exception("Invalid action. Conversion to THOR API failed! (action='" + str(action) + "')")
-        # print(event.metadata["lastActionSuccess"])
-        if (event.metadata["lastActionSuccess"]):
-            self.last_failed_action = None
-            self.action_history.append(action_str)
-            print("ACTION SUCCESS: " + action_str)
-        else:
-            self.last_failed_action = action_str
-            print("ACTION FAILED: " + action_str)
+            elif "LookUp" in action:
+                event = self.step(dict(action="LookUp", forceAction=False), smooth_nav=smooth_nav)
 
-        return event, action
+            elif "LookDown" in action:
+                event = self.step(dict(action="LookDown", forceAction=False), smooth_nav=smooth_nav)
+
+            # === Interaction actions ===
+            elif "OpenObject" in action:
+                if not object_id:
+                    print("[WARN] Missing object_id for OpenObject.")
+                    return self.last_event, action
+
+                visible_objs = [obj['objectId'] for obj in self.last_event.metadata['objects'] if obj['visible']]
+                if object_id not in visible_objs:
+                    print(f"[WARN] {object_id} not visible. Skipping OpenObject.")
+                    return self.last_event, action
+
+                event = self.step(dict(action="OpenObject", objectId=object_id, moveMagnitude=1.0))
+
+            elif "CloseObject" in action:
+                if not object_id:
+                    print("[WARN] Missing object_id for CloseObject.")
+                    return self.last_event, action
+
+                visible_objs = [obj['objectId'] for obj in self.last_event.metadata['objects'] if obj['visible']]
+                if object_id not in visible_objs:
+                    print(f"[WARN] {object_id} not visible. Skipping CloseObject.")
+                    return self.last_event, action
+
+                event = self.step(dict(action="CloseObject", objectId=object_id, forceAction=False))
+
+            elif "PickupObject" in action:
+                if not object_id:
+                    print("[WARN] Missing object_id for PickupObject.")
+                    return self.last_event, action
+                event = self.step(dict(action="PickupObject", objectId=object_id))
+
+            elif "PutObject" in action:
+                print("[DEBUG] Entered PutObject branch.")
+                if not self.last_event:
+                    print("[ERROR] self.last_event is None before PutObject.")
+                    return self.last_event, action
+
+                metadata = getattr(self.last_event, "metadata", None)
+                if not metadata:
+                    print("[ERROR] Missing metadata in last_event.")
+                    return self.last_event, action
+
+                inventory_objects = metadata.get("inventoryObjects", [])
+                if not inventory_objects:
+                    print("[WARN] No inventory objects found in metadata.")
+                    return self.last_event, action
+
+                inventory_object_id = inventory_objects[0].get("objectId", None)
+                if not inventory_object_id:
+                    print("[ERROR] Inventory object missing objectId.")
+                    return self.last_event, action
+
+                print(f"[DEBUG] Holding object {inventory_object_id}, placing it on {object_id}")
+                event = self.step(dict(
+                    action="PutObject",
+                    objectId=inventory_object_id,
+                    # receptacleObjectId=object_id,
+                    forceAction=False,
+                    placeStationary=True
+                ))
+
+            elif "ToggleObjectOn" in action:
+                event = self.step(dict(action="ToggleObjectOn", objectId=object_id))
+
+            elif "ToggleObjectOff" in action:
+                event = self.step(dict(action="ToggleObjectOff", objectId=object_id))
+
+            elif "SliceObject" in action:
+                if not self.last_event or "inventoryObjects" not in self.last_event.metadata:
+                    print("[ERROR] SliceObject attempted but no knife held or metadata missing.")
+                    return self.last_event, action
+
+                inventory_objects = self.last_event.metadata.get("inventoryObjects", [])
+                if not inventory_objects or "Knife" not in inventory_objects[0].get("objectType", ""):
+                    print("[ERROR] Agent not holding a knife before slicing.")
+                    return self.last_event, action
+
+                event = self.step(dict(action="SliceObject", objectId=object_id))
+
+            # elif "GoToObject" in action:
+            #     if not obj or "objectId" not in obj:
+            #         print("[ERROR] obj is None for GoToObject.")
+            #         return self.last_event, action
+            #     print(f"[DEBUG] Moving to object: {obj.get('name', 'unknown')}")
+            #     event = self.move_to_obj(obj=obj)
+
+            else:
+                raise Exception(f"Invalid action: {action}")
+
+            # === Result handling ===
+            if event is None:
+                print(f"[WARN] Event is None after executing action: {action_str}")
+            elif "metadata" not in dir(event) or "lastActionSuccess" not in event.metadata:
+                print(f"[WARN] Event missing metadata or lastActionSuccess: {action_str}")
+            elif event.metadata["lastActionSuccess"]:
+                self.last_failed_action = None
+                self.action_history.append(action_str)
+                print("ACTION SUCCESS:", action_str)
+            else:
+                self.last_failed_action = action_str
+                print(event.metadata["errorMessage"])
+                print("ACTION FAILED:", action_str)
+
+            return event, action
+
+        except TimeoutError:
+            print(f"[ERROR] Timeout during to_thor_api_exec for action {action_str}. Skipping.")
+            return self.last_event, action
+        except RuntimeError as e:
+            if "Target object not found" in str(e) or "not visible" in str(e):
+                print(f"[WARN] Object missing or not visible during {action_str}. Skipping.")
+                return self.last_event, action
+            else:
+                raise e
+        except Exception as e:
+            print(f"[ERROR] Exception during to_thor_api_exec for action {action_str}: {e}")
+            import traceback
+            traceback.print_exc()
+            return self.last_event, action
+
+
 
     def check_clean(self, object_id):
         '''
