@@ -125,9 +125,9 @@ def eval_agent_baseline(tasks_dir, max_steps=10):
                 if wrong_env:
                     print(f"[ERROR] FLAG WRONG ENV ________________________________________________.")
             # object_poses = object_poses_fixed
-            print("Before restore now:", [o['objectId'] for o in env.last_event.metadata['objects']])
-            env.restore_scene(object_poses_fixed, object_toggles, dirty_and_empty)
-            print("After restore:", [o['objectId'] for o in env.last_event.metadata['objects']])
+            # print("Before restore now:", [o['objectId'] for o in env.last_event.metadata['objects']])
+            env.restore_scene(object_poses, object_toggles, dirty_and_empty)
+            # print("After restore:", [o['objectId'] for o in env.last_event.metadata['objects']])
 
             env.step(dict(init_action))
 
