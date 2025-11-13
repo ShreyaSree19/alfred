@@ -480,65 +480,22 @@ class ThorEnv(Controller):
 
         best_cost = np.inf
         pos_idx = 0
-        best_rotation = None
-        best_horizon = None
-        
         for i, pos in enumerate(interactable_positions):
             pos["standing"] = True
-            
-            # Optimize rotation: find rotation with lowest angle diff to object (in 10 deg increments)
-            current_rotation = pos.get("rotation", 0)
-            best_rotation_for_pos = current_rotation
-            best_angle_diff = float('inf')
-            
-            for rot in range(0, 360, 10):
-                pos_copy = pos.copy()
-                pos_copy["rotation"] = rot
-                robot_angle = rot / 180 * np.pi
-                robot_angle = np.pi / 2 - robot_angle
-                rob_to_obj_vec = self.pos_dict_to_array(obj_pos) - self.pos_dict_to_array(pos_copy)
-                robot_vec = np.array([np.cos(robot_angle), np.sin(robot_angle)])
-                rob_to_obj_2d = np.array([rob_to_obj_vec[0], rob_to_obj_vec[2]])
-                
-                if np.linalg.norm(rob_to_obj_2d) > 0:
-                    rob_to_obj_2d = rob_to_obj_2d / np.linalg.norm(rob_to_obj_2d)
-                    angle_diff = np.arccos(np.clip(np.dot(robot_vec, rob_to_obj_2d), -1.0, 1.0))
-                    if angle_diff < best_angle_diff:
-                        best_angle_diff = angle_diff
-                        best_rotation_for_pos = rot
-            
-            pos["rotation"] = best_rotation_for_pos
-            
-            # Optimize horizon: check multiple horizons to find object visibility
-            best_horizon_for_pos = pos.get("horizon", 0)
-            for horizon_angle in [-60, -30, 0, 30]:
-                pos_copy = pos.copy()
-                pos_copy["horizon"] = horizon_angle
-                # Cost calculation with optimized horizon
-                cost = self._pos_cost(pos_copy, obj_pos)
-                if cost < best_cost:
-                    best_cost = cost
-                    pos_idx = i
-                    best_rotation = best_rotation_for_pos
-                    best_horizon = horizon_angle
-            
-            # Also check with default cost if no optimization found better position
-            if best_rotation is None:
-                cost = self._pos_cost(pos, obj_pos)
-                if cost < best_cost:
-                    best_cost = cost
-                    pos_idx = i
-                    best_rotation = best_rotation_for_pos
-                    best_horizon = pos.get("horizon", 0)
-        
-        # Teleport to best position with optimized rotation and horizon
-        final_pos = interactable_positions[pos_idx].copy()
-        if best_rotation is not None:
-            final_pos["rotation"] = best_rotation
-        if best_horizon is not None:
-            final_pos["horizon"] = best_horizon
-        
-        success = self.move_to_dict(final_pos, mode="teleport")
+            pos[""]
+            cost = self._pos_cost(pos, obj_pos)
+            if cost < best_cost:
+                # print("BEST COST: ", cost)
+                best_cost = cost
+                pos_idx = i
+                # PSUEDOCODE
+                # Compute closest reachable position to the object
+                # Using code from pos cost, compute the rotation with the lowest angle diff (in 10 deg increments) to the object
+                # Teleport robot to that position and rotation
+                # Check horizons from  -30, 0, 30, -60 to find in which one the object is visible 
+        success = self.move_to_dict(
+            interactable_positions[pos_idx], mode="teleport"
+        )
         event = self.step("MoveAhead")
 
         return success
