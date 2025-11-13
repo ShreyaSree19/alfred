@@ -459,10 +459,74 @@ class ThorEnv(Controller):
     
     def move_to_dict(self, pos_dict, mode="teleport"):
         if mode == "teleport":
-            event = self.step("TeleportFull", **pos_dict)
+            pos_x, pos_y, pos_z, pos_rotation, pos_horizon = pos_dict["x"],  pos_dict["y"],  pos_dict["z"],  float(pos_dict["rotation"]),  float(pos_dict["horizon"])
+            event = self.step(dict(action="TeleportFull", x=pos_x, y=pos_y, z=pos_z, rotation=pos_rotation, horizon=pos_horizon))
             return event
         elif mode == "navigate":
             raise NotImplementedError
+
+    # def move_to_obj(self, obj):
+    #     obj_pos = obj["position"]
+        
+    #     # 1. Get reachable positions
+    #     event = self.step(dict(action="GetReachablePositions"))
+    #     interactable_positions = event.metadata["actionReturn"]
+        
+    #     if not interactable_positions:
+    #         print("Error no interactable positions found")
+    #         event.metadata["lastActionSuccess"] = False
+    #         return event
+            
+    #     best_cost = np.inf
+    #     best_full_pose = None
+    #     ROTATIONS = np.arange(0, 360, 10) 
+        
+    #     # NOTE: You only search for the best rotation (Yaw) in your current logic.
+    #     # The Horizon is usually searched for *after* teleporting, to check visibility.
+    #     # We will still store the best Yaw.
+        
+    #     for pos in interactable_positions:
+    #         # Ensure keys exist for safe dict manipulation
+    #         if "rotation" not in pos:
+    #             pos["rotation"] = 0
+    #         if "horizon" not in pos:
+    #             pos["horizon"] = 0
+                
+    #         current_best_rot_cost = np.inf
+    #         current_best_rotation = pos["rotation"] 
+
+    #         # 2. Search for the optimal Y-axis rotation (Yaw)
+    #         for rotation in ROTATIONS:
+    #             temp_pose = pos.copy()
+    #             temp_pose["rotation"] = rotation
+                
+    #             # Assuming self._pos_cost calculates a cost based on distance and angle difference
+    #             cost = self._pos_cost(temp_pose, obj_pos) 
+                
+    #             if cost < current_best_rot_cost:
+    #                 current_best_rot_cost = cost
+    #                 current_best_rotation = rotation
+
+    #         # 3. Check if this position/rotation combination is the best overall
+    #         if current_best_rot_cost < best_cost:
+    #             best_cost = current_best_rot_cost
+                
+    #             # Store the full pose: position (x, y, z) + best rotation (Yaw)
+    #             best_full_pose = pos.copy()
+    #             best_full_pose["rotation"] = current_best_rotation
+    #             # Keep horizon at 0 for initial teleport, unless you optimize for it here
+    #             best_full_pose["horizon"] = 0 
+
+    #     print(f"Teleporting to best pose keys: {best_full_pose.keys()}")
+        
+    #     # 4. Execute the teleport using the updated 'move_to_dict' logic
+    #     success = self.move_to_dict(best_full_pose, mode="teleport")
+        
+    #     # You might want to remove this if you only intend to teleport
+    #     # event = self.step("MoveAhead") 
+        
+    #     # Return the success of the teleport action
+    #     return success
     
     def move_to_obj(
 		self,
@@ -477,28 +541,79 @@ class ThorEnv(Controller):
             print("Error no interactable positions found")
             event.metadata["lastActionSuccess"] = False
             return event
-
+        # interactable positions exist
         best_cost = np.inf
-        pos_idx = 0
+        best_full_pose = None
+        ROTATIONS = np.arange(0, 360, 10) 
+        HORIZONS = [-60, -30, 0, 30]
+        
         for i, pos in enumerate(interactable_positions):
             pos["standing"] = True
-            pos[""]
-            cost = self._pos_cost(pos, obj_pos)
-            if cost < best_cost:
-                # print("BEST COST: ", cost)
-                best_cost = cost
-                pos_idx = i
+            
+            if "rotation" not in pos:
+                pos["rotation"] = 0.0
+            if "horizon" not in pos:
+                pos["horizon"] = 0.0
+                
+            # The base position (x, y, z) is fixed for this inner search
+            
+            current_best_rot_cost = np.inf
+            current_best_rotation = pos["rotation"] # Default to the initial rotation
+
+            # 1a. Search for the optimal rotation at the current position (x, y, z)
+            for rotation in ROTATIONS:
+                # Create a temporary pose for cost calculation
+                temp_pose = pos.copy()
+                temp_pose["rotation"] = rotation
+                
+                # Use the original, full _pos_cost, as requested
+                cost = self._pos_cost(temp_pose, obj_pos)
+                
+                if cost < current_best_rot_cost:
+                    current_best_rot_cost = cost
+                    current_best_rotation = rotation
+
+            # 1b. Check if this position/rotation combination is the best overall
+            if current_best_rot_cost < best_cost:
+                best_cost = current_best_rot_cost
+                
+                # Store the full pose (position + best rotation)
+                best_full_pose = pos.copy()
+                best_full_pose["rotation"] = current_best_rotation
+            # if cost < best_cost:
+            #     # print("BEST COST: ", cost)
+            #     best_cost = cost
                 # PSUEDOCODE
                 # Compute closest reachable position to the object
                 # Using code from pos cost, compute the rotation with the lowest angle diff (in 10 deg increments) to the object
                 # Teleport robot to that position and rotation
-                # Check horizons from  -30, 0, 30, -60 to find in which one the object is visible 
-        success = self.move_to_dict(
-            interactable_positions[pos_idx], mode="teleport"
-        )
-        event = self.step("MoveAhead")
+                # Check horizons from  -30, 0, 30, -60 to find in which one the object is visible
+        best_horizon = 0 # Default to 0
+    # Use the position and rotation found in the loop
+        
+        for horizon in HORIZONS:
+            best_full_pose["horizon"] = horizon
+            
+            # Teleport to this temporary pose to check visibility
+            self.move_to_dict(best_full_pose, mode="teleport")
+            
+            # This requires an actual check against the current frame
+            # Assuming self.is_object_visible(obj) exists and uses self.last_event
+            if obj["visible"]: 
+                best_horizon = horizon
+                break # Found a visible horizon, stop searching
 
+        # 3. Teleport robot to the final optimized full pose.
+        best_full_pose["horizon"] = best_horizon # Set the final best horizon 
+    
+        print(best_full_pose.keys())
+        success = self.move_to_dict(
+            best_full_pose, mode="teleport"
+        )
+        # event = self.step("MoveAhead")
         return success
+
+    #     return success
     def to_thor_api_exec(self, action, object_id="", action_str="", obj=None, smooth_nav=False):
         """
         Convert a high-level action string to a valid THOR API action.
@@ -600,12 +715,12 @@ class ThorEnv(Controller):
 
                 event = self.step(dict(action="SliceObject", objectId=object_id))
 
-            # elif "GoToObject" in action:
-            #     if not obj or "objectId" not in obj:
-            #         print("[ERROR] obj is None for GoToObject.")
-            #         return self.last_event, action
-            #     print(f"[DEBUG] Moving to object: {obj.get('name', 'unknown')}")
-            #     event = self.move_to_obj(obj=obj)
+            elif "GoToObject" in action:
+                if not obj or "objectId" not in obj:
+                    print("[ERROR] obj is None for GoToObject.")
+                    return self.last_event, action
+                print(f"[DEBUG] Moving to object: {obj.get('name', 'unknown')}")
+                event = self.move_to_obj(obj=obj)
 
             else:
                 raise Exception(f"Invalid action: {action}")
