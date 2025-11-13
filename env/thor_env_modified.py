@@ -125,7 +125,7 @@ class ThorEnv(Controller):
         '''
         restore object locations and states
         '''
-        event = super().step(dict(
+        super().step(dict(
             action='Initialize',
             gridSize=constants.AGENT_STEP_SIZE / constants.RECORD_SMOOTHING_FACTOR,
             cameraY=constants.CAMERA_HEIGHT_OFFSET,
@@ -136,35 +136,16 @@ class ThorEnv(Controller):
             visibility_distance=constants.VISIBILITY_DISTANCE,
             makeAgentsVisible=False,
         ))
-      
-        for toggle_info in object_toggles:
-            objects_metadata = event.metadata["objects"]
-            # Filter objects by their objectType
-            objects_of_type = [obj for obj in objects_metadata if obj["objectType"] == toggle_info["objectType"]]
-            print("HERE_________________________________________________")
-            for obj in objects_of_type:
-                if toggle_info["isOn"]:
-                     action = dict(action="ToggleObjectOn",
-                            objectId=obj['objectId'], forceAction=True)
-                else:
-                    action = dict(action="ToggleObjectOff",
-                            objectId=obj['objectId'], forceAction=True)
-                super().step(action)
+        if len(object_toggles) > 0:
+            super().step((dict(action='SetObjectToggles', objectToggles=object_toggles)))
+
         if dirty_and_empty:
             super().step(dict(action='SetStateOfAllObjects',
-                                StateChange="CanBeDirty",
-                                forceAction=True))
+                               StateChange="CanBeDirty",
+                               forceAction=True))
             super().step(dict(action='SetStateOfAllObjects',
-                                StateChange="CanBeFilled",
-                                forceAction=True))
-        for object_pose in object_poses:
-            super().step(dict(
-                action='TeleportObject',
-                objectId=object_pose['objectId'],
-                position=object_pose['position'],
-                rotation=object_pose['rotation'],
-                forceAction=True
-            ))
+                               StateChange="CanBeFilled",
+                               forceAction=False))
         super().step((dict(action='SetObjectPoses', objectPoses=object_poses)))
 
 
@@ -499,22 +480,65 @@ class ThorEnv(Controller):
 
         best_cost = np.inf
         pos_idx = 0
+        best_rotation = None
+        best_horizon = None
+        
         for i, pos in enumerate(interactable_positions):
             pos["standing"] = True
-            pos[""]
-            cost = self._pos_cost(pos, obj_pos)
-            if cost < best_cost:
-                # print("BEST COST: ", cost)
-                best_cost = cost
-                pos_idx = i
-                # PSUEDOCODE
-                # Compute closest reachable position to the object
-                # Using code from pos cost, compute the rotation with the lowest angle diff to the object
-                # Teleport robot to that position and rotation
-                # Check horizons from  -30, 0, 30, -60 to find in which one the object is visible 
-        success = self.move_to_dict(
-            interactable_positions[pos_idx], mode="teleport"
-        )
+            
+            # Optimize rotation: find rotation with lowest angle diff to object (in 10 deg increments)
+            current_rotation = pos.get("rotation", 0)
+            best_rotation_for_pos = current_rotation
+            best_angle_diff = float('inf')
+            
+            for rot in range(0, 360, 10):
+                pos_copy = pos.copy()
+                pos_copy["rotation"] = rot
+                robot_angle = rot / 180 * np.pi
+                robot_angle = np.pi / 2 - robot_angle
+                rob_to_obj_vec = self.pos_dict_to_array(obj_pos) - self.pos_dict_to_array(pos_copy)
+                robot_vec = np.array([np.cos(robot_angle), np.sin(robot_angle)])
+                rob_to_obj_2d = np.array([rob_to_obj_vec[0], rob_to_obj_vec[2]])
+                
+                if np.linalg.norm(rob_to_obj_2d) > 0:
+                    rob_to_obj_2d = rob_to_obj_2d / np.linalg.norm(rob_to_obj_2d)
+                    angle_diff = np.arccos(np.clip(np.dot(robot_vec, rob_to_obj_2d), -1.0, 1.0))
+                    if angle_diff < best_angle_diff:
+                        best_angle_diff = angle_diff
+                        best_rotation_for_pos = rot
+            
+            pos["rotation"] = best_rotation_for_pos
+            
+            # Optimize horizon: check multiple horizons to find object visibility
+            best_horizon_for_pos = pos.get("horizon", 0)
+            for horizon_angle in [-60, -30, 0, 30]:
+                pos_copy = pos.copy()
+                pos_copy["horizon"] = horizon_angle
+                # Cost calculation with optimized horizon
+                cost = self._pos_cost(pos_copy, obj_pos)
+                if cost < best_cost:
+                    best_cost = cost
+                    pos_idx = i
+                    best_rotation = best_rotation_for_pos
+                    best_horizon = horizon_angle
+            
+            # Also check with default cost if no optimization found better position
+            if best_rotation is None:
+                cost = self._pos_cost(pos, obj_pos)
+                if cost < best_cost:
+                    best_cost = cost
+                    pos_idx = i
+                    best_rotation = best_rotation_for_pos
+                    best_horizon = pos.get("horizon", 0)
+        
+        # Teleport to best position with optimized rotation and horizon
+        final_pos = interactable_positions[pos_idx].copy()
+        if best_rotation is not None:
+            final_pos["rotation"] = best_rotation
+        if best_horizon is not None:
+            final_pos["horizon"] = best_horizon
+        
+        success = self.move_to_dict(final_pos, mode="teleport")
         event = self.step("MoveAhead")
 
         return success
