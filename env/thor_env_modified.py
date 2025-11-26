@@ -452,7 +452,7 @@ class ThorEnv(Controller):
         rob_to_obj_2d = rob_to_obj_2d / np.linalg.norm(rob_to_obj_2d)
         angle_diff = np.arccos(np.dot(robot_vec, rob_to_obj_2d))
         pos_score += angle_diff * 10
-        pos_score += np.linalg.norm(rob_to_obj_vec)
+        pos_score += 100*np.linalg.norm(rob_to_obj_vec)
         pos_score += pos_dict["horizon"] * -1 + 60
         pos_score += 0 if pos_dict["standing"] else 100
         return pos_score
@@ -527,7 +527,27 @@ class ThorEnv(Controller):
         
     #     # Return the success of the teleport action
     #     return success
-    
+
+    def _print_relative_diagnostics(self, agent_pose, object_location):
+        """
+        Calculates and prints the distance and angle between the agent's final pose 
+        and the object's position.
+        """
+        
+        # Ensure inputs are valid
+        if "rotation" not in agent_pose:
+            print("ERROR: Agent pose is missing 'rotation' key for diagnostics.")
+            return
+            
+        print("\n--- VISIBILITY DIAGNOSTICS ---")
+        
+        # --- A. Calculate Distance ---
+        rob_to_obj_vec = self.pos_dict_to_array(object_location) - self.pos_dict_to_array(agent_pose)
+        distance = np.linalg.norm(rob_to_obj_vec)
+        # Provide a simple diagnosis based on the numbers:
+        if distance > 1.5:
+            print(" Distance is > 1.5m (THOR Visibility Threshold).")
+
     def move_to_obj(
 		self,
 		obj,
@@ -556,7 +576,7 @@ class ThorEnv(Controller):
                 pos["horizon"] = 0.0
                 
             # The base position (x, y, z) is fixed for this inner search
-            
+            # not finding the right x,y, z
             current_best_rot_cost = np.inf
             current_best_rotation = pos["rotation"] # Default to the initial rotation
 
@@ -566,7 +586,7 @@ class ThorEnv(Controller):
                 temp_pose = pos.copy()
                 temp_pose["rotation"] = rotation
                 
-                # Use the original, full _pos_cost, as requested
+                # Use _pos_cost
                 cost = self._pos_cost(temp_pose, obj_pos)
                 
                 if cost < current_best_rot_cost:
@@ -606,10 +626,21 @@ class ThorEnv(Controller):
         # 3. Teleport robot to the final optimized full pose.
         best_full_pose["horizon"] = best_horizon # Set the final best horizon 
     
-        print(best_full_pose.keys())
+        # ---  DIAGNOSTIC PRINTING BLOCK ---
+        # print(best_full_pose.keys())
         success = self.move_to_dict(
             best_full_pose, mode="teleport"
         )
+        agent_final_pose = success.metadata["agent"] 
+        obj_pos = obj["position"] # Object position
+        print("Agent pose", agent_final_pose)
+        print("obj", obj_pos)
+        print("rotation", best_full_pose["rotation"])
+        print("horizon", best_full_pose["horizon"])
+        # # Calculate and print diagnostics
+        # self._print_relative_diagnostics(agent_final_pose, obj_pos)
+        
+        
         # event = self.step("MoveAhead")
         return success
 
