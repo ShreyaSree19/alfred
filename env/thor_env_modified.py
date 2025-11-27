@@ -442,20 +442,57 @@ class ThorEnv(Controller):
         return np.array([pos_dict["x"], pos_dict["y"], pos_dict["z"]])
 
     def _pos_cost(self, pos_dict, object_location):
-        #add distance between robot and object
         pos_score = 0
+        # Vector from robot to object
+        rob_to_obj_vec = self.pos_dict_to_array(object_location) - self.pos_dict_to_array(pos_dict)
+        pos_score += 100 * np.linalg.norm(rob_to_obj_vec)
+        return pos_score
+    
+    def _rotation_cost(self, pos_dict, object_location):
+        # Calculate the robot's angle
         robot_angle = pos_dict["rotation"] / 180 * np.pi
         robot_angle = np.pi / 2 - robot_angle
+        
+        # Vector from robot to object
         rob_to_obj_vec = self.pos_dict_to_array(object_location) - self.pos_dict_to_array(pos_dict)
+        
+        # Robot's 2D vector
         robot_vec = np.array([np.cos(robot_angle), np.sin(robot_angle)])
+        
+        # Object's 2D direction vector (normalized)
         rob_to_obj_2d = np.array([rob_to_obj_vec[0], rob_to_obj_vec[2]])
-        rob_to_obj_2d = rob_to_obj_2d / np.linalg.norm(rob_to_obj_2d)
-        angle_diff = np.arccos(np.dot(robot_vec, rob_to_obj_2d))
-        pos_score += angle_diff * 10
-        pos_score += 100*np.linalg.norm(rob_to_obj_vec)
-        pos_score += pos_dict["horizon"] * -1 + 60
-        pos_score += 0 if pos_dict["standing"] else 100
-        return pos_score
+        norm = np.linalg.norm(rob_to_obj_2d)
+        
+        if norm < 1e-6:
+            return 0.0 # Robot is too close to the object, no rotation cost
+            
+        rob_to_obj_2d = rob_to_obj_2d / norm
+        
+        # Calculate the angle difference
+        dot_product = np.dot(robot_vec, rob_to_obj_2d)
+        # Ensure arccos input is within [-1, 1] to prevent math domain errors
+        angle_diff = np.arccos(np.clip(dot_product, -1.0, 1.0)) 
+        
+        # Cost term: angle_diff * 10
+        rotation_cost = angle_diff * 10
+        
+        return rotation_cost
+    
+    # def _pos_cost(self, pos_dict, object_location):
+    #     #add distance between robot and object
+    #     pos_score = 0
+    #     robot_angle = pos_dict["rotation"] / 180 * np.pi
+    #     robot_angle = np.pi / 2 - robot_angle
+    #     rob_to_obj_vec = self.pos_dict_to_array(object_location) - self.pos_dict_to_array(pos_dict)
+    #     robot_vec = np.array([np.cos(robot_angle), np.sin(robot_angle)])
+    #     rob_to_obj_2d = np.array([rob_to_obj_vec[0], rob_to_obj_vec[2]])
+    #     rob_to_obj_2d = rob_to_obj_2d / np.linalg.norm(rob_to_obj_2d)
+    #     angle_diff = np.arccos(np.dot(robot_vec, rob_to_obj_2d))
+    #     pos_score += angle_diff * 10
+    #     pos_score += 100*np.linalg.norm(rob_to_obj_vec)
+    #     pos_score += pos_dict["horizon"] * -1 + 60
+    #     pos_score += 0 if pos_dict["standing"] else 100
+    #     return pos_score
     
     def move_to_dict(self, pos_dict, mode="teleport"):
         if mode == "teleport":
@@ -465,184 +502,193 @@ class ThorEnv(Controller):
         elif mode == "navigate":
             raise NotImplementedError
 
-    # def move_to_obj(self, obj):
-    #     obj_pos = obj["position"]
+    def move_to_obj(
+        self,
+        obj,
+    ):
+        obj_pos = obj["position"]
+        print("object position: ", obj_pos)
+        event = self.step(dict(action="GetReachablePositions"))
+        interactable_positions = event.metadata["actionReturn"]
+        print("Interactable positions: ", interactable_positions)
+        if not interactable_positions:
+            print("Error no interactable positions found")
+            event.metadata["lastActionSuccess"] = False
+            return event
+
+        # --- Step 1: Find the optimal Position (x, y, z) based on distance/standing ---
+        best_pos_cost = np.inf
+        best_base_pose = None 
         
-    #     # 1. Get reachable positions
-    #     event = self.step(dict(action="GetReachablePositions"))
+        for pos in interactable_positions:
+            # Initialize mandatory keys (even if not used in _pos_and_horizon_cost, they're needed later)
+            pos["standing"] = True
+            pos["horizon"] = 0.0 # Use default horizon for base cost calculation
+            
+            # Calculate cost based on position, standing, and a default horizon
+            cost = self._pos_cost(pos, obj_pos) 
+            
+            if cost < best_pos_cost:
+                best_pos_cost = cost
+                # Store the position components (x, y, z, standing)
+                best_base_pose = pos.copy()
+                best_base_pose["rotation"] = 0.0 # Placeholder
+                # horizon is already set to 0.0 copy
+
+        # if best_base_pose is None:
+        #     print("Error: Could not find a best pose after position selection.")
+        #     return event
+        # print("HEREEEEEEEEEEEEEEEEEEEEEEEEEEEEE")
+        # print("Best pose" , best_base_pose)
+            
+        # --- Step 2: Find the optimal Rotation for the chosen position ---
+        best_rot_cost = np.inf
+        best_rotation = 0.0
+        ROTATIONS = np.arange(0, 360, 10)
+
+        # Position is fixed (best_base_pose). Iterate rotations to find the best angle.
+        for rotation in ROTATIONS:
+            temp_pose = best_base_pose.copy()
+            temp_pose["rotation"] = rotation
+            
+            # Calculate ONLY the rotation cost
+            rotation_cost = self._rotation_cost(temp_pose, obj_pos)
+            
+            if rotation_cost < best_rot_cost:
+                best_rot_cost = rotation_cost
+                best_rotation = rotation
+
+        # Final full pose after position and rotation search
+        best_full_pose = best_base_pose.copy()
+        best_full_pose["rotation"] = best_rotation
+
+        # --- Step 3: Find the best Horizon for visibility ---
+        best_horizon = 0 # Default to 0
+        HORIZONS = [-60, -30, 0, 30]
+
+        # Teleport to the best (x,y,z, rotation) with various horizons to check visibility
+        for horizon in HORIZONS:
+            best_full_pose["horizon"] = horizon
+            
+            # Teleport and check visibility
+            self.move_to_dict(best_full_pose, mode="teleport")
+            
+            # Assuming obj.get("visible") reflects the visibility in the current frame
+            if obj.get("visible"): 
+                best_horizon = horizon
+                break # Found a visible horizon
+
+        # 4. Teleport robot to the final optimized full pose.
+        best_full_pose["horizon"] = best_horizon
+        
+        success = self.move_to_dict(
+            best_full_pose, mode="teleport"
+        )
+
+        # --- DIAGNOSTIC PRINTING BLOCK ---
+        agent_final_pose = success.metadata["agent"] 
+        # obj_pos = obj["position"]
+        print("Agent pose", agent_final_pose)
+        # print("obj", obj_pos)
+        # print("rotation", best_full_pose["rotation"])
+        # print("horizon", best_full_pose["horizon"])
+        
+        return success
+    # def move_to_obj(
+	# 	self,
+	# 	obj,
+	# ):
+    #     obj_pos=obj["position"]
+    #     event = self.step(dict(
+	# 			action="GetReachablePositions"),
+	# 		)
     #     interactable_positions = event.metadata["actionReturn"]
-        
     #     if not interactable_positions:
     #         print("Error no interactable positions found")
     #         event.metadata["lastActionSuccess"] = False
     #         return event
-            
+    #     # interactable positions exist
     #     best_cost = np.inf
     #     best_full_pose = None
     #     ROTATIONS = np.arange(0, 360, 10) 
+    #     HORIZONS = [-60, -30, 0, 30]
         
-    #     # NOTE: You only search for the best rotation (Yaw) in your current logic.
-    #     # The Horizon is usually searched for *after* teleporting, to check visibility.
-    #     # We will still store the best Yaw.
-        
-    #     for pos in interactable_positions:
-    #         # Ensure keys exist for safe dict manipulation
+    #     for i, pos in enumerate(interactable_positions):
+    #         pos["standing"] = True
+            
     #         if "rotation" not in pos:
-    #             pos["rotation"] = 0
+    #             pos["rotation"] = 0.0
     #         if "horizon" not in pos:
-    #             pos["horizon"] = 0
+    #             pos["horizon"] = 0.0
                 
+    #         # The base position (x, y, z) is fixed for this inner search
+    #         # not finding the right x,y, z
     #         current_best_rot_cost = np.inf
-    #         current_best_rotation = pos["rotation"] 
+    #         current_best_rotation = pos["rotation"] # Default to the initial rotation
 
-    #         # 2. Search for the optimal Y-axis rotation (Yaw)
+    #         # 1a. Search for the optimal rotation at the current position (x, y, z)
     #         for rotation in ROTATIONS:
+    #             # Create a temporary pose for cost calculation
     #             temp_pose = pos.copy()
     #             temp_pose["rotation"] = rotation
                 
-    #             # Assuming self._pos_cost calculates a cost based on distance and angle difference
-    #             cost = self._pos_cost(temp_pose, obj_pos) 
+    #             # Use _pos_cost
+    #             cost = self._pos_cost(temp_pose, obj_pos)
                 
     #             if cost < current_best_rot_cost:
     #                 current_best_rot_cost = cost
     #                 current_best_rotation = rotation
 
-    #         # 3. Check if this position/rotation combination is the best overall
+    #         # 1b. Check if this position/rotation combination is the best overall
     #         if current_best_rot_cost < best_cost:
     #             best_cost = current_best_rot_cost
                 
-    #             # Store the full pose: position (x, y, z) + best rotation (Yaw)
+    #             # Store the full pose (position + best rotation)
     #             best_full_pose = pos.copy()
     #             best_full_pose["rotation"] = current_best_rotation
-    #             # Keep horizon at 0 for initial teleport, unless you optimize for it here
-    #             best_full_pose["horizon"] = 0 
-
-    #     print(f"Teleporting to best pose keys: {best_full_pose.keys()}")
+    #         # if cost < best_cost:
+    #         #     # print("BEST COST: ", cost)
+    #         #     best_cost = cost
+    #             # PSUEDOCODE
+    #             # Compute closest reachable position to the object
+    #             # Using code from pos cost, compute the rotation with the lowest angle diff (in 10 deg increments) to the object
+    #             # Teleport robot to that position and rotation
+    #             # Check horizons from  -30, 0, 30, -60 to find in which one the object is visible
+    #     best_horizon = 0 # Default to 0
+    # # Use the position and rotation found in the loop
         
-    #     # 4. Execute the teleport using the updated 'move_to_dict' logic
-    #     success = self.move_to_dict(best_full_pose, mode="teleport")
-        
-    #     # You might want to remove this if you only intend to teleport
-    #     # event = self.step("MoveAhead") 
-        
-    #     # Return the success of the teleport action
-    #     return success
-
-    def _print_relative_diagnostics(self, agent_pose, object_location):
-        """
-        Calculates and prints the distance and angle between the agent's final pose 
-        and the object's position.
-        """
-        
-        # Ensure inputs are valid
-        if "rotation" not in agent_pose:
-            print("ERROR: Agent pose is missing 'rotation' key for diagnostics.")
-            return
+    #     for horizon in HORIZONS:
+    #         best_full_pose["horizon"] = horizon
             
-        print("\n--- VISIBILITY DIAGNOSTICS ---")
-        
-        # --- A. Calculate Distance ---
-        rob_to_obj_vec = self.pos_dict_to_array(object_location) - self.pos_dict_to_array(agent_pose)
-        distance = np.linalg.norm(rob_to_obj_vec)
-        # Provide a simple diagnosis based on the numbers:
-        if distance > 1.5:
-            print(" Distance is > 1.5m (THOR Visibility Threshold).")
-
-    def move_to_obj(
-		self,
-		obj,
-	):
-        obj_pos=obj["position"]
-        event = self.step(dict(
-				action="GetReachablePositions"),
-			)
-        interactable_positions = event.metadata["actionReturn"]
-        if not interactable_positions:
-            print("Error no interactable positions found")
-            event.metadata["lastActionSuccess"] = False
-            return event
-        # interactable positions exist
-        best_cost = np.inf
-        best_full_pose = None
-        ROTATIONS = np.arange(0, 360, 10) 
-        HORIZONS = [-60, -30, 0, 30]
-        
-        for i, pos in enumerate(interactable_positions):
-            pos["standing"] = True
+    #         # Teleport to this temporary pose to check visibility
+    #         self.move_to_dict(best_full_pose, mode="teleport")
             
-            if "rotation" not in pos:
-                pos["rotation"] = 0.0
-            if "horizon" not in pos:
-                pos["horizon"] = 0.0
-                
-            # The base position (x, y, z) is fixed for this inner search
-            # not finding the right x,y, z
-            current_best_rot_cost = np.inf
-            current_best_rotation = pos["rotation"] # Default to the initial rotation
+    #         # This requires an actual check against the current frame
+    #         # Assuming self.is_object_visible(obj) exists and uses self.last_event
+    #         if obj["visible"]: 
+    #             best_horizon = horizon
+    #             break # Found a visible horizon, stop searching
 
-            # 1a. Search for the optimal rotation at the current position (x, y, z)
-            for rotation in ROTATIONS:
-                # Create a temporary pose for cost calculation
-                temp_pose = pos.copy()
-                temp_pose["rotation"] = rotation
-                
-                # Use _pos_cost
-                cost = self._pos_cost(temp_pose, obj_pos)
-                
-                if cost < current_best_rot_cost:
-                    current_best_rot_cost = cost
-                    current_best_rotation = rotation
-
-            # 1b. Check if this position/rotation combination is the best overall
-            if current_best_rot_cost < best_cost:
-                best_cost = current_best_rot_cost
-                
-                # Store the full pose (position + best rotation)
-                best_full_pose = pos.copy()
-                best_full_pose["rotation"] = current_best_rotation
-            # if cost < best_cost:
-            #     # print("BEST COST: ", cost)
-            #     best_cost = cost
-                # PSUEDOCODE
-                # Compute closest reachable position to the object
-                # Using code from pos cost, compute the rotation with the lowest angle diff (in 10 deg increments) to the object
-                # Teleport robot to that position and rotation
-                # Check horizons from  -30, 0, 30, -60 to find in which one the object is visible
-        best_horizon = 0 # Default to 0
-    # Use the position and rotation found in the loop
-        
-        for horizon in HORIZONS:
-            best_full_pose["horizon"] = horizon
-            
-            # Teleport to this temporary pose to check visibility
-            self.move_to_dict(best_full_pose, mode="teleport")
-            
-            # This requires an actual check against the current frame
-            # Assuming self.is_object_visible(obj) exists and uses self.last_event
-            if obj["visible"]: 
-                best_horizon = horizon
-                break # Found a visible horizon, stop searching
-
-        # 3. Teleport robot to the final optimized full pose.
-        best_full_pose["horizon"] = best_horizon # Set the final best horizon 
+    #     # 3. Teleport robot to the final optimized full pose.
+    #     best_full_pose["horizon"] = best_horizon # Set the final best horizon 
     
-        # ---  DIAGNOSTIC PRINTING BLOCK ---
-        # print(best_full_pose.keys())
-        success = self.move_to_dict(
-            best_full_pose, mode="teleport"
-        )
-        agent_final_pose = success.metadata["agent"] 
-        obj_pos = obj["position"] # Object position
-        print("Agent pose", agent_final_pose)
-        print("obj", obj_pos)
-        print("rotation", best_full_pose["rotation"])
-        print("horizon", best_full_pose["horizon"])
-        # # Calculate and print diagnostics
-        # self._print_relative_diagnostics(agent_final_pose, obj_pos)
+    #     # ---  DIAGNOSTIC PRINTING BLOCK ---
+    #     # print(best_full_pose.keys())
+    #     success = self.move_to_dict(
+    #         best_full_pose, mode="teleport"
+    #     )
+    #     agent_final_pose = success.metadata["agent"] 
+    #     obj_pos = obj["position"] # Object position
+    #     print("Agent pose", agent_final_pose)
+    #     print("obj", obj_pos)
+    #     print("rotation", best_full_pose["rotation"])
+    #     print("horizon", best_full_pose["horizon"])
+    #     # # Calculate and print diagnostics
+    #     # self._print_relative_diagnostics(agent_final_pose, obj_pos)
         
         
-        # event = self.step("MoveAhead")
-        return success
+    #     # event = self.step("MoveAhead")
+    #     return success
 
     #     return success
     def to_thor_api_exec(self, action, object_id="", action_str="", obj=None, smooth_nav=False):
