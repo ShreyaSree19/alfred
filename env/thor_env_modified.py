@@ -7,8 +7,9 @@ from env.tasks import get_task
 from ai2thor.controller import Controller
 import gen.utils.image_util as image_util
 from gen.utils import game_util
+from scipy import spatial
 from gen.utils.game_util import get_objects_of_type, get_obj_of_type_closest_to_obj
-
+import math
 
 DEFAULT_RENDER_SETTINGS = {'renderImage': True,
                            'renderDepthImage': False,
@@ -45,6 +46,8 @@ class ThorEnv(Controller):
 
         self.action_history = []
         self.last_failed_action = None
+        self.reachable_positions, self.reachable_position_kdtree = None, None
+        self.agent_height = 0.9
 
         print("ThorEnv started.")
 
@@ -148,7 +151,19 @@ class ThorEnv(Controller):
                                forceAction=False))
         super().step((dict(action='SetObjectPoses', objectPoses=object_poses)))
 
+        self.reachable_positions, self.reachable_position_kdtree = self.get_reachable_positions()
 
+    def get_reachable_positions(self):
+        free_positions = super().step(dict(action="GetReachablePositions")).metadata["actionReturn"]
+        free_positions = np.array([[p['x'], p['y'], p['z']] for p in free_positions])
+        kd_tree = spatial.KDTree(free_positions)
+        return free_positions, kd_tree
+
+    def find_close_reachable_position(self, loc, nth=1):
+        d, i = self.reachable_position_kdtree.query(loc, k=nth + 1)
+        selected = i[nth - 1]
+        return self.reachable_positions[selected]
+    
     # def restore_scene(self, object_poses, object_toggles, dirty_and_empty):
     #     '''
     #     restore object locations and states
@@ -512,10 +527,11 @@ class ThorEnv(Controller):
         obj,
     ):
         obj_pos = obj["position"]
-        print("object position: ", obj)
+        # print("object keys: ", obj.keys())
+        # print("Object: ", obj)
         event = self.step(dict(action="GetReachablePositions"))
         interactable_positions = event.metadata["actionReturn"]
-        print("Interactable positions: ", interactable_positions)
+        # print("Interactable positions: ", interactable_positions)
         if not interactable_positions:
             print("Error no interactable positions found")
             event.metadata["lastActionSuccess"] = False
@@ -600,6 +616,85 @@ class ThorEnv(Controller):
         
         return success
    
+    def nav_to_obj(
+        self,
+        obj,):
+        max_attempts = 20
+        teleport_success = False
+
+        # get obj location
+        loc = obj['position']
+        obj_rot = obj['rotation']['y']
+        target_obj = obj["name"].split('_')[0]
+        # do not move if the object is already visible and close
+        if obj['visible'] and obj['distance'] < 1.0:
+            print('Object is already visible')
+            max_attempts = 0
+            teleport_success = True
+
+        # try teleporting
+        reachable_pos_idx = 0
+        for i in range(max_attempts):
+            reachable_pos_idx += 1
+            if i == 10 and (target_obj == 'Fridge' or target_obj == 'Microwave'):
+                reachable_pos_idx -= 10
+
+            closest_loc = self.find_close_reachable_position([loc['x'], loc['y'], loc['z']], reachable_pos_idx)
+
+            # calculate desired rotation angle (see https://github.com/allenai/ai2thor/issues/806)
+            rot_angle = math.atan2(-(loc['x'] - closest_loc[0]), loc['z'] - closest_loc[2])
+            if rot_angle > 0:
+                rot_angle -= 2 * math.pi
+            rot_angle = -(180 / math.pi) * rot_angle  # in degrees
+
+            if i < 10 and (target_obj == 'Fridge' or target_obj == 'Microwave'):  # not always correct, but better than nothing
+                angle_diff = abs(self.angle_diff(rot_angle, obj_rot))
+                if target_obj == 'Fridge' and \
+                        not ((90 - 20 < angle_diff < 90 + 20) or (270 - 20 < angle_diff < 270 + 20)):
+                    continue
+                if target_obj == 'Microwave' and \
+                        not ((180 - 20 < angle_diff < 180 + 20) or (0 - 20 < angle_diff < 0 + 20)):
+                    continue
+
+            # calculate desired horizon angle
+            camera_height = self.agent_height + constants.CAMERA_HEIGHT_OFFSET
+            xz_dist = math.hypot(loc['x'] - closest_loc[0], loc['z'] - closest_loc[2])
+            hor_angle = math.atan2((loc['y'] - camera_height), xz_dist)
+            hor_angle = (180 / math.pi) * hor_angle  # in degrees
+            hor_angle *= 0.9  # adjust angle for better view
+            # hor_angle = -30
+            # hor_angle = 0
+
+            # # teleport
+            # super().step(dict(action="TeleportFull",
+            #                     x=closest_loc[0], y=self.agent_height, z=closest_loc[2],
+            #                     rotation=rot_angle, horizon=-hor_angle))
+
+            # if not self.last_event.metadata['lastActionSuccess']:
+            #     print(f"TeleportFull action failed: {self.last_event.metadata['errorMessage']}, trying again...")
+            # else:
+            #     teleport_success = True
+            #     break
+            # 1. Construct the position dictionary for move_to_dict
+            target_pose_dict = {
+                "x": closest_loc[0],
+                "y": self.agent_height, # Assuming agent_height is the correct 'y' position
+                "z": closest_loc[2],
+                "rotation": rot_angle,
+                "horizon": -hor_angle
+            }
+
+            # 2. Use the helper method
+            event = self.move_to_dict(target_pose_dict, mode="teleport")
+
+            if not event.metadata['lastActionSuccess']:
+                print(f"TeleportFull action failed: {event.metadata['errorMessage']}, trying again...")
+            else:
+                return event
+        print("Failed to navigate to object after max attempts.")
+        return self.last_event
+
+
     def to_thor_api_exec(self, action, object_id="", action_str="", obj=None, smooth_nav=False):
         """
         Convert a high-level action string to a valid THOR API action.
@@ -706,7 +801,8 @@ class ThorEnv(Controller):
                     print("[ERROR] obj is None for GoToObject.")
                     return self.last_event, action
                 print(f"[DEBUG] Moving to object: {obj.get('name', 'unknown')}")
-                event = self.move_to_obj(obj=obj)
+                event = self.nav_to_obj(obj=obj)
+                # event = self.move_to_obj(obj=obj)
 
             else:
                 raise Exception(f"Invalid action: {action}")
